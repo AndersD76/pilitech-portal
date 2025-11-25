@@ -141,9 +141,7 @@ app.get('/api/devices', authenticateToken, async (req, res) => {
         d.id,
         d.serial_number,
         d.name,
-        d.last_seen,
-        d.client_name,
-        d.location
+        d.last_seen
       FROM devices d
     `;
 
@@ -200,7 +198,6 @@ app.get('/api/latest-readings', authenticateToken, async (req, res) => {
         d.serial_number,
         d.name,
         d.last_seen,
-        d.client_name,
         l.*
       FROM devices d
       LEFT JOIN latest l ON l.device_id = d.id
@@ -358,16 +355,16 @@ app.get('/api/maintenance', authenticateToken, async (req, res) => {
 });
 
 // Obter clientes (admin only)
+// Por enquanto retorna lista vazia - client_name será adicionado futuramente
 app.get('/api/clients', authenticateToken, requireAdmin, async (req, res) => {
   try {
+    // Retorna dispositivos agrupados por serial_number como placeholder
     const query = `
-      SELECT DISTINCT
-        client_name,
-        COUNT(*) as device_count
+      SELECT
+        serial_number as client_name,
+        1 as device_count
       FROM devices
-      WHERE client_name IS NOT NULL
-      GROUP BY client_name
-      ORDER BY client_name
+      ORDER BY serial_number
     `;
 
     const result = await pool.query(query);
