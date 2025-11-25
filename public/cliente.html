@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PILI TECH - Portal do Cliente</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -124,10 +125,90 @@
     </div>
 
     <!-- Recent Alerts -->
-    <div class="bg-white rounded-xl shadow-sm p-6">
+    <div class="bg-white rounded-xl shadow-sm p-6 mb-8">
       <h3 class="text-xl font-bold text-gray-800 mb-6">Alertas Recentes</h3>
       <div id="alertsList" class="space-y-3">
         <div class="text-center py-8 text-gray-500">Carregando...</div>
+      </div>
+    </div>
+
+    <!-- Telemetria e Gráficos Técnicos -->
+    <div class="bg-white rounded-xl shadow-sm p-6 mb-8">
+      <div class="flex items-center justify-between mb-6">
+        <h3 class="text-xl font-bold text-gray-800">Telemetria e Dados Tecnicos</h3>
+        <select id="deviceSelector" onchange="loadTelemetry()" class="px-4 py-2 border rounded-lg text-sm">
+          <option value="">Selecione um dispositivo</option>
+        </select>
+      </div>
+
+      <!-- Stats Técnicos -->
+      <div id="techStats" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <div class="bg-gray-50 rounded-lg p-4 text-center">
+          <div class="text-2xl font-bold text-blue-600" id="teleLeituras">-</div>
+          <div class="text-xs text-gray-500">Total Leituras</div>
+        </div>
+        <div class="bg-gray-50 rounded-lg p-4 text-center">
+          <div class="text-2xl font-bold text-green-600" id="teleUptime">-</div>
+          <div class="text-xs text-gray-500">Uptime Medio (24h)</div>
+        </div>
+        <div class="bg-gray-50 rounded-lg p-4 text-center">
+          <div class="text-2xl font-bold text-purple-600" id="teleMemoria">-</div>
+          <div class="text-xs text-gray-500">Memoria Livre Media</div>
+        </div>
+        <div class="bg-gray-50 rounded-lg p-4 text-center">
+          <div class="text-2xl font-bold text-orange-600" id="teleMemMin">-</div>
+          <div class="text-xs text-gray-500">Memoria Minima</div>
+        </div>
+      </div>
+
+      <!-- Gráficos -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Gráfico de Ciclos por Dia -->
+        <div class="border rounded-lg p-4">
+          <h4 class="font-semibold text-gray-700 mb-4">Ciclos por Dia (7 dias)</h4>
+          <canvas id="chartCiclos" height="200"></canvas>
+        </div>
+
+        <!-- Gráfico de Memória -->
+        <div class="border rounded-lg p-4">
+          <h4 class="font-semibold text-gray-700 mb-4">Memoria Livre (24h)</h4>
+          <canvas id="chartMemoria" height="200"></canvas>
+        </div>
+
+        <!-- Gráfico de Uptime -->
+        <div class="border rounded-lg p-4">
+          <h4 class="font-semibold text-gray-700 mb-4">Uptime por Hora (24h)</h4>
+          <canvas id="chartUptime" height="200"></canvas>
+        </div>
+
+        <!-- Gráfico de Leituras por Hora -->
+        <div class="border rounded-lg p-4">
+          <h4 class="font-semibold text-gray-700 mb-4">Leituras por Hora (24h)</h4>
+          <canvas id="chartLeituras" height="200"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tabela de Leituras Detalhadas -->
+    <div class="bg-white rounded-xl shadow-sm p-6">
+      <h3 class="text-xl font-bold text-gray-800 mb-6">Ultimas Leituras Detalhadas</h3>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-50">
+            <tr>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Timestamp</th>
+              <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Ciclos</th>
+              <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Memoria</th>
+              <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Uptime</th>
+              <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Sistema</th>
+              <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">WiFi</th>
+              <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Alertas</th>
+            </tr>
+          </thead>
+          <tbody id="readingsTable" class="divide-y divide-gray-200">
+            <tr><td colspan="7" class="px-4 py-8 text-center text-gray-500">Selecione um dispositivo</td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
 
@@ -344,6 +425,238 @@
 
     // Auto refresh every 30 seconds
     setInterval(refreshData, 30000);
+
+    // ========== TELEMETRIA E GRÁFICOS ==========
+    let chartCiclos, chartMemoria, chartUptime, chartLeituras;
+    let devicesList = [];
+
+    // Populate device selector
+    async function populateDeviceSelector() {
+      const readings = await api('/api/latest-readings');
+      if (!readings) return;
+
+      devicesList = readings;
+      const selector = document.getElementById('deviceSelector');
+      selector.innerHTML = '<option value="">Selecione um dispositivo</option>';
+
+      readings.forEach(d => {
+        const option = document.createElement('option');
+        option.value = d.serial_number;
+        option.textContent = `${d.serial_number} - ${d.name || 'PILI TECH'}`;
+        selector.appendChild(option);
+      });
+
+      // Auto-select first device
+      if (readings.length > 0) {
+        selector.value = readings[0].serial_number;
+        loadTelemetry();
+      }
+    }
+
+    // Load telemetry data
+    async function loadTelemetry() {
+      const serialNumber = document.getElementById('deviceSelector').value;
+      if (!serialNumber) return;
+
+      // Load device stats
+      const stats = await api('/api/device-stats/' + serialNumber);
+      if (stats) {
+        document.getElementById('teleLeituras').textContent = stats.totalLeituras.toLocaleString();
+        document.getElementById('teleUptime').textContent = formatUptime(stats.avgUptime);
+        document.getElementById('teleMemoria').textContent = formatBytes(stats.memory.avg);
+        document.getElementById('teleMemMin').textContent = formatBytes(stats.memory.min);
+
+        // Update ciclos chart
+        updateCiclosChart(stats.ciclosDiarios);
+      }
+
+      // Load telemetry for charts
+      const telemetry = await api('/api/telemetry/' + serialNumber + '?hours=24');
+      if (telemetry) {
+        updateMemoriaChart(telemetry.hourly);
+        updateUptimeChart(telemetry.hourly);
+        updateLeiturasChart(telemetry.hourly);
+        updateReadingsTable(telemetry.detailed);
+      }
+    }
+
+    // Format bytes to KB
+    function formatBytes(bytes) {
+      if (!bytes) return '-';
+      return Math.round(bytes / 1024) + ' KB';
+    }
+
+    // Format uptime
+    function formatUptime(seconds) {
+      if (!seconds) return '-';
+      const hours = Math.floor(seconds / 3600);
+      const mins = Math.floor((seconds % 3600) / 60);
+      return hours + 'h ' + mins + 'm';
+    }
+
+    // Update Ciclos Chart
+    function updateCiclosChart(data) {
+      const ctx = document.getElementById('chartCiclos').getContext('2d');
+
+      if (chartCiclos) chartCiclos.destroy();
+
+      const labels = data.map(d => new Date(d.dia).toLocaleDateString('pt-BR', { weekday: 'short', day: 'numeric' }));
+      const values = data.map(d => parseInt(d.ciclos) || 0);
+
+      chartCiclos = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Ciclos',
+            data: values,
+            backgroundColor: 'rgba(220, 38, 38, 0.7)',
+            borderColor: 'rgb(220, 38, 38)',
+            borderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { beginAtZero: true }
+          }
+        }
+      });
+    }
+
+    // Update Memoria Chart
+    function updateMemoriaChart(data) {
+      const ctx = document.getElementById('chartMemoria').getContext('2d');
+
+      if (chartMemoria) chartMemoria.destroy();
+
+      const labels = data.map(d => new Date(d.hora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+      const values = data.map(d => Math.round(parseFloat(d.memoria_livre) / 1024) || 0);
+
+      chartMemoria = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Memoria (KB)',
+            data: values,
+            borderColor: 'rgb(147, 51, 234)',
+            backgroundColor: 'rgba(147, 51, 234, 0.1)',
+            fill: true,
+            tension: 0.4
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { beginAtZero: false }
+          }
+        }
+      });
+    }
+
+    // Update Uptime Chart
+    function updateUptimeChart(data) {
+      const ctx = document.getElementById('chartUptime').getContext('2d');
+
+      if (chartUptime) chartUptime.destroy();
+
+      const labels = data.map(d => new Date(d.hora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+      const values = data.map(d => Math.round(parseFloat(d.uptime) / 3600) || 0);
+
+      chartUptime = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Uptime (horas)',
+            data: values,
+            borderColor: 'rgb(34, 197, 94)',
+            backgroundColor: 'rgba(34, 197, 94, 0.1)',
+            fill: true,
+            tension: 0.4
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { beginAtZero: true }
+          }
+        }
+      });
+    }
+
+    // Update Leituras Chart
+    function updateLeiturasChart(data) {
+      const ctx = document.getElementById('chartLeituras').getContext('2d');
+
+      if (chartLeituras) chartLeituras.destroy();
+
+      const labels = data.map(d => new Date(d.hora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+      const values = data.map(d => parseInt(d.leituras) || 0);
+
+      chartLeituras = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Leituras',
+            data: values,
+            backgroundColor: 'rgba(59, 130, 246, 0.7)',
+            borderColor: 'rgb(59, 130, 246)',
+            borderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { beginAtZero: true }
+          }
+        }
+      });
+    }
+
+    // Update readings table
+    function updateReadingsTable(data) {
+      const tbody = document.getElementById('readingsTable');
+
+      if (!data || data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-gray-500">Nenhuma leitura encontrada</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = data.slice(-20).reverse().map(r => {
+        const hasAlert = r.moega_cheia || r.fosso_cheio;
+        return `
+          <tr class="${hasAlert ? 'bg-red-50' : ''}">
+            <td class="px-4 py-2 text-xs text-gray-600">${new Date(r.timestamp).toLocaleString('pt-BR')}</td>
+            <td class="px-4 py-2 text-center font-medium">${r.ciclos_hoje || 0}</td>
+            <td class="px-4 py-2 text-center text-xs">${formatBytes(r.free_heap)}</td>
+            <td class="px-4 py-2 text-center text-xs">${formatUptime(r.uptime_seconds)}</td>
+            <td class="px-4 py-2 text-center">
+              <span class="px-2 py-0.5 rounded text-xs ${r.sistema_ligado ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}">
+                ${r.sistema_ligado ? 'ON' : 'OFF'}
+              </span>
+            </td>
+            <td class="px-4 py-2 text-center">
+              <span class="px-2 py-0.5 rounded text-xs ${r.wifi_connected ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}">
+                ${r.wifi_connected ? 'OK' : 'OFF'}
+              </span>
+            </td>
+            <td class="px-4 py-2 text-center">
+              ${hasAlert ? '<span class="px-2 py-0.5 bg-red-100 text-red-700 rounded text-xs">ALERTA</span>' : '<span class="text-xs text-gray-400">-</span>'}
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    // Initialize telemetry after main data loads
+    setTimeout(populateDeviceSelector, 1000);
   </script>
 </body>
 </html>

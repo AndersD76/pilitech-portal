@@ -325,6 +325,165 @@ app.get('/api/stats', authenticateToken, async (req, res) => {
   }
 });
 
+// Obter dados de telemetria (histórico para gráficos)
+app.get('/api/telemetry/:serialNumber', authenticateToken, async (req, res) => {
+  try {
+    const { serialNumber } = req.params;
+    const hours = parseInt(req.query.hours) || 24;
+
+    // Verificar permissão se for cliente
+    if (req.user.role === 'cliente' && req.user.serialNumbers) {
+      if (!req.user.serialNumbers.includes(serialNumber)) {
+        return res.status(403).json({ error: 'Acesso negado a este dispositivo' });
+      }
+    }
+
+    // Buscar device_id
+    const deviceResult = await pool.query(
+      'SELECT id FROM devices WHERE serial_number = $1',
+      [serialNumber]
+    );
+
+    if (deviceResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Dispositivo não encontrado' });
+    }
+
+    const deviceId = deviceResult.rows[0].id;
+
+    // Buscar leituras das últimas N horas (agrupadas por hora)
+    const query = `
+      SELECT
+        date_trunc('hour', timestamp) as hora,
+        MAX(ciclos_hoje) as ciclos,
+        AVG(free_heap) as memoria_livre,
+        MAX(uptime_seconds) as uptime,
+        MAX(horas_operacao) as horas_operacao,
+        COUNT(*) as leituras,
+        BOOL_OR(sistema_ligado) as sistema_ativo,
+        BOOL_OR(moega_cheia) as alertas_moega,
+        BOOL_OR(fosso_cheio) as alertas_fosso
+      FROM sensor_readings
+      WHERE device_id = $1
+        AND timestamp > NOW() - INTERVAL '${hours} hours'
+      GROUP BY date_trunc('hour', timestamp)
+      ORDER BY hora ASC
+    `;
+
+    const result = await pool.query(query, [deviceId]);
+
+    // Buscar últimas 100 leituras detalhadas
+    const detailQuery = `
+      SELECT
+        timestamp,
+        ciclos_hoje,
+        ciclos_total,
+        free_heap,
+        uptime_seconds,
+        horas_operacao,
+        minutos_operacao,
+        sistema_ligado,
+        sensor_0_graus,
+        sensor_40_graus,
+        subindo,
+        descendo,
+        moega_cheia,
+        fosso_cheio,
+        wifi_connected
+      FROM sensor_readings
+      WHERE device_id = $1
+      ORDER BY timestamp DESC
+      LIMIT 100
+    `;
+
+    const detailResult = await pool.query(detailQuery, [deviceId]);
+
+    res.json({
+      hourly: result.rows,
+      detailed: detailResult.rows.reverse()
+    });
+  } catch (err) {
+    console.error('Erro ao buscar telemetria:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Obter estatísticas detalhadas por dispositivo
+app.get('/api/device-stats/:serialNumber', authenticateToken, async (req, res) => {
+  try {
+    const { serialNumber } = req.params;
+
+    // Verificar permissão se for cliente
+    if (req.user.role === 'cliente' && req.user.serialNumbers) {
+      if (!req.user.serialNumbers.includes(serialNumber)) {
+        return res.status(403).json({ error: 'Acesso negado a este dispositivo' });
+      }
+    }
+
+    // Buscar device_id
+    const deviceResult = await pool.query(
+      'SELECT id, name, last_seen FROM devices WHERE serial_number = $1',
+      [serialNumber]
+    );
+
+    if (deviceResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Dispositivo não encontrado' });
+    }
+
+    const device = deviceResult.rows[0];
+
+    // Estatísticas de ciclos por dia (últimos 7 dias)
+    const ciclosDiarios = await pool.query(`
+      SELECT
+        date_trunc('day', timestamp)::date as dia,
+        MAX(ciclos_hoje) as ciclos
+      FROM sensor_readings
+      WHERE device_id = $1
+        AND timestamp > NOW() - INTERVAL '7 days'
+      GROUP BY date_trunc('day', timestamp)::date
+      ORDER BY dia ASC
+    `, [device.id]);
+
+    // Total de leituras
+    const totalLeituras = await pool.query(
+      'SELECT COUNT(*) as total FROM sensor_readings WHERE device_id = $1',
+      [device.id]
+    );
+
+    // Tempo médio de uptime
+    const avgUptime = await pool.query(`
+      SELECT AVG(uptime_seconds) as avg_uptime
+      FROM sensor_readings
+      WHERE device_id = $1 AND timestamp > NOW() - INTERVAL '24 hours'
+    `, [device.id]);
+
+    // Memória livre média
+    const avgMemory = await pool.query(`
+      SELECT AVG(free_heap) as avg_memory, MIN(free_heap) as min_memory, MAX(free_heap) as max_memory
+      FROM sensor_readings
+      WHERE device_id = $1 AND timestamp > NOW() - INTERVAL '24 hours'
+    `, [device.id]);
+
+    res.json({
+      device: {
+        serial_number: serialNumber,
+        name: device.name,
+        last_seen: device.last_seen
+      },
+      ciclosDiarios: ciclosDiarios.rows,
+      totalLeituras: parseInt(totalLeituras.rows[0].total),
+      avgUptime: Math.round(parseFloat(avgUptime.rows[0].avg_uptime) || 0),
+      memory: {
+        avg: Math.round(parseFloat(avgMemory.rows[0].avg_memory) || 0),
+        min: parseInt(avgMemory.rows[0].min_memory) || 0,
+        max: parseInt(avgMemory.rows[0].max_memory) || 0
+      }
+    });
+  } catch (err) {
+    console.error('Erro ao buscar estatísticas do dispositivo:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Obter alertas recentes
 app.get('/api/recent-alerts', authenticateToken, async (req, res) => {
   try {
