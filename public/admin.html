@@ -210,12 +210,68 @@
         <!-- Clientes Section -->
         <section id="sec-clientes" class="section hidden">
           <div class="bg-white rounded-xl shadow-sm p-6">
-            <h3 class="text-lg font-bold text-gray-800 mb-4">Clientes</h3>
+            <div class="flex items-center justify-between mb-4">
+              <h3 class="text-lg font-bold text-gray-800">Clientes</h3>
+              <button onclick="openClientModal()" class="px-4 py-2 bg-pili-red text-white rounded-lg hover:bg-pili-darkred flex items-center gap-2">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
+                Novo Cliente
+              </button>
+            </div>
             <div id="clientsList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               <div class="text-center py-8 text-gray-500">Carregando...</div>
             </div>
           </div>
         </section>
+
+        <!-- Modal de Cliente -->
+        <div id="clientModal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50">
+          <div class="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
+            <div class="p-6 border-b">
+              <h3 class="text-lg font-bold text-gray-800" id="modalTitle">Novo Cliente</h3>
+            </div>
+            <form id="clientForm" class="p-6 space-y-4">
+              <input type="hidden" id="clientId">
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Nome da Empresa *</label>
+                <input type="text" id="clientName" required class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-pili-red focus:border-transparent">
+              </div>
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1">Usuario (login) *</label>
+                  <input type="text" id="clientUsername" required class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-pili-red focus:border-transparent">
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1">Senha *</label>
+                  <input type="text" id="clientPassword" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-pili-red focus:border-transparent" placeholder="Deixe vazio para manter">
+                </div>
+              </div>
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                  <input type="email" id="clientEmail" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-pili-red focus:border-transparent">
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1">Telefone</label>
+                  <input type="text" id="clientPhone" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-pili-red focus:border-transparent">
+                </div>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Dispositivos Vinculados</label>
+                <div id="devicesCheckboxes" class="border rounded-lg p-3 max-h-40 overflow-y-auto space-y-2">
+                  <div class="text-sm text-gray-500">Carregando dispositivos...</div>
+                </div>
+              </div>
+              <div class="flex items-center gap-2">
+                <input type="checkbox" id="clientActive" checked class="w-4 h-4 text-pili-red rounded">
+                <label for="clientActive" class="text-sm text-gray-700">Cliente Ativo</label>
+              </div>
+            </form>
+            <div class="p-6 border-t flex justify-end gap-3">
+              <button onclick="closeClientModal()" class="px-4 py-2 border rounded-lg hover:bg-gray-50">Cancelar</button>
+              <button onclick="saveClient()" class="px-4 py-2 bg-pili-red text-white rounded-lg hover:bg-pili-darkred">Salvar</button>
+            </div>
+          </div>
+        </div>
 
       </div>
     </main>
@@ -472,6 +528,8 @@
     }
 
     // Load clients
+    let availableDevices = [];
+
     async function loadClients() {
       const clients = await api('/api/clients');
       if (!clients) return;
@@ -484,16 +542,194 @@
       }
 
       list.innerHTML = clients.map(c => `
-        <div class="bg-gray-50 rounded-xl p-6 text-center">
-          <div class="w-16 h-16 bg-pili-red/10 rounded-full flex items-center justify-center mx-auto mb-4">
-            <svg class="w-8 h-8 text-pili-red" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/>
-            </svg>
+        <div class="bg-gray-50 rounded-xl p-6">
+          <div class="flex items-start justify-between mb-4">
+            <div class="w-12 h-12 bg-pili-red/10 rounded-full flex items-center justify-center">
+              <svg class="w-6 h-6 text-pili-red" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/>
+              </svg>
+            </div>
+            <div class="flex gap-2">
+              <button onclick="editClient(${c.id})" class="p-2 hover:bg-gray-200 rounded-lg" title="Editar">
+                <svg class="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+              </button>
+              <button onclick="deleteClient(${c.id}, '${c.name}')" class="p-2 hover:bg-red-100 rounded-lg" title="Excluir">
+                <svg class="w-4 h-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+              </button>
+            </div>
           </div>
-          <h4 class="font-bold text-gray-800">${c.client_name}</h4>
-          <p class="text-sm text-gray-500 mt-1">${c.device_count} dispositivo(s)</p>
+          <h4 class="font-bold text-gray-800">${c.name}</h4>
+          <p class="text-sm text-gray-500">@${c.username}</p>
+          ${c.email ? `<p class="text-xs text-gray-400 mt-1">${c.email}</p>` : ''}
+          ${c.phone ? `<p class="text-xs text-gray-400">${c.phone}</p>` : ''}
+          <div class="mt-3 pt-3 border-t">
+            <p class="text-xs text-gray-500 font-medium">Dispositivos:</p>
+            <div class="flex flex-wrap gap-1 mt-1">
+              ${c.serial_numbers && c.serial_numbers.length > 0
+                ? c.serial_numbers.map(sn => `<span class="px-2 py-0.5 bg-pili-red/10 text-pili-red text-xs rounded">${sn}</span>`).join('')
+                : '<span class="text-xs text-gray-400">Nenhum</span>'}
+            </div>
+          </div>
+          <div class="mt-2">
+            <span class="px-2 py-0.5 text-xs rounded ${c.active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}">
+              ${c.active ? 'Ativo' : 'Inativo'}
+            </span>
+          </div>
         </div>
       `).join('');
+    }
+
+    // Load available devices for modal
+    async function loadAvailableDevices() {
+      const devices = await api('/api/available-devices');
+      if (devices) {
+        availableDevices = devices;
+      }
+    }
+
+    // Open client modal
+    async function openClientModal(clientId = null) {
+      await loadAvailableDevices();
+
+      const modal = document.getElementById('clientModal');
+      const form = document.getElementById('clientForm');
+
+      // Reset form
+      form.reset();
+      document.getElementById('clientId').value = '';
+      document.getElementById('clientActive').checked = true;
+
+      // Render device checkboxes
+      const checkboxContainer = document.getElementById('devicesCheckboxes');
+      if (availableDevices.length === 0) {
+        checkboxContainer.innerHTML = '<div class="text-sm text-gray-500">Nenhum dispositivo disponivel</div>';
+      } else {
+        checkboxContainer.innerHTML = availableDevices.map(d => `
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" name="devices" value="${d.serial_number}" class="w-4 h-4 text-pili-red rounded">
+            <span class="text-sm">${d.serial_number} - ${d.name || 'Sem nome'}</span>
+          </label>
+        `).join('');
+      }
+
+      if (clientId) {
+        // Edit mode
+        document.getElementById('modalTitle').textContent = 'Editar Cliente';
+        document.getElementById('clientPassword').placeholder = 'Deixe vazio para manter';
+        document.getElementById('clientPassword').required = false;
+
+        const client = await api('/api/clients/' + clientId);
+        if (client) {
+          document.getElementById('clientId').value = client.id;
+          document.getElementById('clientName').value = client.name;
+          document.getElementById('clientUsername').value = client.username;
+          document.getElementById('clientEmail').value = client.email || '';
+          document.getElementById('clientPhone').value = client.phone || '';
+          document.getElementById('clientActive').checked = client.active;
+
+          // Check devices
+          if (client.serial_numbers) {
+            client.serial_numbers.forEach(sn => {
+              const checkbox = checkboxContainer.querySelector(`input[value="${sn}"]`);
+              if (checkbox) checkbox.checked = true;
+            });
+          }
+        }
+      } else {
+        // New mode
+        document.getElementById('modalTitle').textContent = 'Novo Cliente';
+        document.getElementById('clientPassword').placeholder = '';
+        document.getElementById('clientPassword').required = true;
+      }
+
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+    }
+
+    // Close client modal
+    function closeClientModal() {
+      const modal = document.getElementById('clientModal');
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+    }
+
+    // Save client
+    async function saveClient() {
+      const id = document.getElementById('clientId').value;
+      const data = {
+        name: document.getElementById('clientName').value,
+        username: document.getElementById('clientUsername').value,
+        password: document.getElementById('clientPassword').value || undefined,
+        email: document.getElementById('clientEmail').value,
+        phone: document.getElementById('clientPhone').value,
+        active: document.getElementById('clientActive').checked,
+        serialNumbers: Array.from(document.querySelectorAll('#devicesCheckboxes input:checked')).map(cb => cb.value)
+      };
+
+      // Validation
+      if (!data.name || !data.username) {
+        alert('Nome e Usuario sao obrigatorios');
+        return;
+      }
+
+      if (!id && !data.password) {
+        alert('Senha e obrigatoria para novos clientes');
+        return;
+      }
+
+      try {
+        const url = id ? '/api/clients/' + id : '/api/clients';
+        const method = id ? 'PUT' : 'POST';
+
+        const res = await fetch(url, {
+          method,
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + token
+          },
+          body: JSON.stringify(data)
+        });
+
+        const result = await res.json();
+
+        if (res.ok && result.success) {
+          closeClientModal();
+          loadClients();
+          alert(id ? 'Cliente atualizado!' : 'Cliente criado!');
+        } else {
+          alert('Erro: ' + (result.error || result.message));
+        }
+      } catch (err) {
+        alert('Erro ao salvar: ' + err.message);
+      }
+    }
+
+    // Edit client
+    function editClient(id) {
+      openClientModal(id);
+    }
+
+    // Delete client
+    async function deleteClient(id, name) {
+      if (!confirm(`Deseja realmente excluir o cliente "${name}"?`)) return;
+
+      try {
+        const res = await fetch('/api/clients/' + id, {
+          method: 'DELETE',
+          headers: { 'Authorization': 'Bearer ' + token }
+        });
+
+        const result = await res.json();
+
+        if (res.ok && result.success) {
+          loadClients();
+          alert('Cliente excluido!');
+        } else {
+          alert('Erro: ' + (result.error || result.message));
+        }
+      } catch (err) {
+        alert('Erro ao excluir: ' + err.message);
+      }
     }
 
     // Check if timestamp is recent (< 10 min)

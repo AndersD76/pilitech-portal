@@ -86,38 +86,81 @@ function requireAdmin(req, res, next) {
 // ============ ROTAS DE AUTENTICACAO ============
 
 // Login
-app.post('/api/login', (req, res) => {
+app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
 
-  const user = USERS[username.toLowerCase()];
+  // Primeiro verifica usuários hardcoded (admin)
+  const hardcodedUser = USERS[username.toLowerCase()];
 
-  if (!user || user.password !== password) {
-    return res.status(401).json({
-      success: false,
-      message: 'Usuario ou senha incorretos'
+  if (hardcodedUser && hardcodedUser.password === password) {
+    const token = jwt.sign(
+      {
+        username: username.toLowerCase(),
+        role: hardcodedUser.role,
+        name: hardcodedUser.name,
+        serialNumbers: hardcodedUser.serialNumbers || []
+      },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    return res.json({
+      success: true,
+      token,
+      user: {
+        username: username.toLowerCase(),
+        role: hardcodedUser.role,
+        name: hardcodedUser.name
+      }
     });
   }
 
-  // Gerar token JWT
-  const token = jwt.sign(
-    {
-      username: username.toLowerCase(),
-      role: user.role,
-      name: user.name,
-      serialNumbers: user.serialNumbers || []
-    },
-    JWT_SECRET,
-    { expiresIn: '24h' }
-  );
+  // Verifica clientes no banco de dados
+  try {
+    const result = await pool.query(
+      'SELECT id, username, password, name FROM clients WHERE username = $1 AND active = true',
+      [username.toLowerCase()]
+    );
 
-  res.json({
-    success: true,
-    token,
-    user: {
-      username: username.toLowerCase(),
-      role: user.role,
-      name: user.name
+    if (result.rows.length > 0 && result.rows[0].password === password) {
+      const dbClient = result.rows[0];
+
+      // Buscar dispositivos associados
+      const devicesResult = await pool.query(
+        'SELECT serial_number FROM client_devices WHERE client_id = $1',
+        [dbClient.id]
+      );
+      const serialNumbers = devicesResult.rows.map(r => r.serial_number);
+
+      const token = jwt.sign(
+        {
+          username: dbClient.username,
+          role: 'cliente',
+          name: dbClient.name,
+          serialNumbers: serialNumbers
+        },
+        JWT_SECRET,
+        { expiresIn: '24h' }
+      );
+
+      return res.json({
+        success: true,
+        token,
+        user: {
+          username: dbClient.username,
+          role: 'cliente',
+          name: dbClient.name
+        }
+      });
     }
+  } catch (err) {
+    console.error('Erro ao verificar cliente no banco:', err);
+  }
+
+  // Nenhum usuário encontrado
+  return res.status(401).json({
+    success: false,
+    message: 'Usuario ou senha incorretos'
   });
 });
 
@@ -354,23 +397,180 @@ app.get('/api/maintenance', authenticateToken, async (req, res) => {
   }
 });
 
-// Obter clientes (admin only)
-// Por enquanto retorna lista vazia - client_name será adicionado futuramente
+// ============ CRUD DE CLIENTES (admin only) ============
+
+// Listar todos os clientes
 app.get('/api/clients', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    // Retorna dispositivos agrupados por serial_number como placeholder
     const query = `
       SELECT
-        serial_number as client_name,
-        1 as device_count
-      FROM devices
-      ORDER BY serial_number
+        c.id,
+        c.username,
+        c.name,
+        c.email,
+        c.phone,
+        c.created_at,
+        c.active,
+        COALESCE(
+          (SELECT array_agg(cd.serial_number) FROM client_devices cd WHERE cd.client_id = c.id),
+          ARRAY[]::varchar[]
+        ) as serial_numbers
+      FROM clients c
+      ORDER BY c.name
     `;
-
     const result = await pool.query(query);
     res.json(result.rows);
   } catch (err) {
     console.error('Erro ao buscar clientes:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Obter um cliente específico
+app.get('/api/clients/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const query = `
+      SELECT
+        c.id,
+        c.username,
+        c.name,
+        c.email,
+        c.phone,
+        c.created_at,
+        c.active,
+        COALESCE(
+          (SELECT array_agg(cd.serial_number) FROM client_devices cd WHERE cd.client_id = c.id),
+          ARRAY[]::varchar[]
+        ) as serial_numbers
+      FROM clients c
+      WHERE c.id = $1
+    `;
+    const result = await pool.query(query, [id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Cliente não encontrado' });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Erro ao buscar cliente:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Criar novo cliente
+app.post('/api/clients', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { username, password, name, email, phone, serialNumbers } = req.body;
+
+    // Validação
+    if (!username || !password || !name) {
+      return res.status(400).json({ error: 'Username, password e name são obrigatórios' });
+    }
+
+    // Verificar se username já existe
+    const existing = await pool.query('SELECT id FROM clients WHERE username = $1', [username.toLowerCase()]);
+    if (existing.rows.length > 0) {
+      return res.status(400).json({ error: 'Username já existe' });
+    }
+
+    // Inserir cliente
+    const insertResult = await pool.query(
+      `INSERT INTO clients (username, password, name, email, phone)
+       VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+      [username.toLowerCase(), password, name, email || null, phone || null]
+    );
+
+    const clientId = insertResult.rows[0].id;
+
+    // Associar dispositivos se fornecidos
+    if (serialNumbers && serialNumbers.length > 0) {
+      for (const sn of serialNumbers) {
+        await pool.query(
+          'INSERT INTO client_devices (client_id, serial_number) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+          [clientId, sn]
+        );
+      }
+    }
+
+    res.status(201).json({ success: true, id: clientId, message: 'Cliente criado com sucesso' });
+  } catch (err) {
+    console.error('Erro ao criar cliente:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Atualizar cliente
+app.put('/api/clients/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { username, password, name, email, phone, active, serialNumbers } = req.body;
+
+    // Verificar se cliente existe
+    const existing = await pool.query('SELECT id FROM clients WHERE id = $1', [id]);
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ error: 'Cliente não encontrado' });
+    }
+
+    // Atualizar campos (senha opcional)
+    if (password) {
+      await pool.query(
+        `UPDATE clients SET username = $1, password = $2, name = $3, email = $4, phone = $5, active = $6 WHERE id = $7`,
+        [username.toLowerCase(), password, name, email || null, phone || null, active !== false, id]
+      );
+    } else {
+      await pool.query(
+        `UPDATE clients SET username = $1, name = $2, email = $3, phone = $4, active = $5 WHERE id = $6`,
+        [username.toLowerCase(), name, email || null, phone || null, active !== false, id]
+      );
+    }
+
+    // Atualizar dispositivos associados
+    if (serialNumbers !== undefined) {
+      // Remover associações antigas
+      await pool.query('DELETE FROM client_devices WHERE client_id = $1', [id]);
+
+      // Adicionar novas associações
+      if (serialNumbers && serialNumbers.length > 0) {
+        for (const sn of serialNumbers) {
+          await pool.query(
+            'INSERT INTO client_devices (client_id, serial_number) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+            [id, sn]
+          );
+        }
+      }
+    }
+
+    res.json({ success: true, message: 'Cliente atualizado com sucesso' });
+  } catch (err) {
+    console.error('Erro ao atualizar cliente:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Excluir cliente
+app.delete('/api/clients/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await pool.query('DELETE FROM clients WHERE id = $1 RETURNING id', [id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Cliente não encontrado' });
+    }
+
+    res.json({ success: true, message: 'Cliente excluído com sucesso' });
+  } catch (err) {
+    console.error('Erro ao excluir cliente:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Listar dispositivos disponíveis para associar
+app.get('/api/available-devices', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT serial_number, name FROM devices ORDER BY serial_number');
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Erro ao buscar dispositivos:', err);
     res.status(500).json({ error: err.message });
   }
 });
