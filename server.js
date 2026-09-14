@@ -746,6 +746,183 @@ app.get('/cliente.html', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'cliente.html'));
 });
 
+// ============================================================
+// INGESTAO DE TELEMETRIA (dispositivos IoT em campo)
+// Autenticacao por X-API-Key (o firmware envia esse header).
+// Grava nas MESMAS tabelas que o portal ja le: sensor_readings,
+// event_logs, maintenance_logs - e atualiza devices.last_seen.
+// ============================================================
+
+const DEVICE_API_KEY = process.env.API_KEY || 'pilitech_00002025_secret_key';
+
+function authenticateDevice(req, res, next) {
+  const apiKey = req.headers['x-api-key'] || req.query.api_key;
+  if (apiKey !== DEVICE_API_KEY) {
+    return res.status(401).json({ error: 'API Key invalida' });
+  }
+  next();
+}
+
+// Acha o device pelo serial; cria automaticamente se ainda nao existir.
+async function getOrCreateDeviceId(serial_number) {
+  if (!serial_number) return null;
+  const found = await pool.query('SELECT id FROM devices WHERE serial_number = $1', [serial_number]);
+  if (found.rows.length > 0) return found.rows[0].id;
+  const created = await pool.query(
+    'INSERT INTO devices (serial_number, name) VALUES ($1, $2) RETURNING id',
+    [serial_number, 'Tombador ' + serial_number]
+  );
+  console.log('Dispositivo auto-registrado: ' + serial_number);
+  return created.rows[0].id;
+}
+
+// POST /api/sensor-reading - leitura completa dos sensores
+app.post('/api/sensor-reading', authenticateDevice, async (req, res) => {
+  try {
+    const {
+      serial_number, sistema_ligado, sensor_0_graus, sensor_40_graus,
+      trava_roda, moega_cheia, fosso_cheio, subindo, descendo,
+      ciclos_hoje, ciclos_total, horas_operacao, minutos_operacao,
+      free_heap, uptime_seconds, wifi_connected,
+      trava_chassi, trava_pino_e, trava_pino_d, moega_fosso,
+      portao_fechado, sistema_ativo, sensor_config
+    } = req.body;
+
+    const deviceId = await getOrCreateDeviceId(serial_number);
+    if (!deviceId) return res.status(400).json({ error: 'serial_number ausente' });
+
+    await pool.query(
+      'INSERT INTO sensor_readings (' +
+      ' device_id, sistema_ligado, sensor_0_graus, sensor_40_graus,' +
+      ' trava_roda, moega_cheia, fosso_cheio, subindo, descendo,' +
+      ' ciclos_hoje, ciclos_total, horas_operacao, minutos_operacao,' +
+      ' free_heap, uptime_seconds, wifi_connected,' +
+      ' trava_chassi, trava_pino_e, trava_pino_d, moega_fosso,' +
+      ' portao_fechado, sistema_ativo, sensor_config' +
+      ') VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)',
+      [
+        deviceId, sistema_ligado, sensor_0_graus, sensor_40_graus,
+        trava_roda, moega_cheia, fosso_cheio, subindo, descendo,
+        ciclos_hoje, ciclos_total, horas_operacao, minutos_operacao,
+        free_heap, uptime_seconds, wifi_connected,
+        trava_chassi, trava_pino_e, trava_pino_d, moega_fosso,
+        portao_fechado, sistema_ativo,
+        sensor_config ? JSON.stringify(sensor_config) : null
+      ]
+    );
+
+    await pool.query('UPDATE devices SET last_seen = CURRENT_TIMESTAMP WHERE id = $1', [deviceId]);
+    console.log('Leitura salva - ' + serial_number);
+    res.json({ success: true, message: 'Leitura salva com sucesso' });
+  } catch (error) {
+    console.error('Erro ao salvar leitura:', error);
+    res.status(500).json({ error: 'Erro ao salvar leitura', details: error.message });
+  }
+});
+
+// POST /api/live-status - telemetria ao vivo
+app.post('/api/live-status', authenticateDevice, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const deviceId = await getOrCreateDeviceId(b.serial_number);
+    if (!deviceId) return res.status(400).json({ error: 'serial_number ausente' });
+
+    await pool.query(
+      'INSERT INTO sensor_readings (' +
+      ' device_id, sistema_ligado, sensor_0_graus, sensor_40_graus,' +
+      ' trava_roda, moega_fosso, portao_fechado,' +
+      ' trava_chassi, trava_pino_e, trava_pino_d,' +
+      ' ciclos_hoje, ciclos_total, horas_operacao, minutos_operacao,' +
+      ' uptime_seconds, sistema_ativo' +
+      ') VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)',
+      [
+        deviceId, b.sistema_ativo, b.sensor_0_graus, b.sensor_40_graus,
+        b.trava_roda, b.moega_fosso, b.portao_fechado,
+        b.trava_chassi, b.trava_pino_e, b.trava_pino_d,
+        b.ciclos_hoje, b.ciclos_total, b.horas_operacao, b.minutos_operacao,
+        b.uptime_seconds, b.sistema_ativo
+      ]
+    );
+
+    await pool.query('UPDATE devices SET last_seen = CURRENT_TIMESTAMP WHERE id = $1', [deviceId]);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Erro no live-status:', error);
+    res.status(500).json({ error: 'Erro no live-status', details: error.message });
+  }
+});
+
+// POST /api/event - eventos e alertas
+app.post('/api/event', authenticateDevice, async (req, res) => {
+  try {
+    const { serial_number, event_type, message, sensor_name, sensor_value } = req.body;
+    const deviceId = await getOrCreateDeviceId(serial_number);
+    if (!deviceId) return res.status(400).json({ error: 'serial_number ausente' });
+
+    await pool.query(
+      'INSERT INTO event_logs (device_id, event_type, message, sensor_name, sensor_value) VALUES ($1, $2, $3, $4, $5)',
+      [deviceId, event_type, message, sensor_name, sensor_value]
+    );
+
+    await pool.query('UPDATE devices SET last_seen = CURRENT_TIMESTAMP WHERE id = $1', [deviceId]);
+    console.log('Evento - ' + serial_number + ': ' + event_type);
+    res.json({ success: true, message: 'Evento salvo com sucesso' });
+  } catch (error) {
+    console.error('Erro ao salvar evento:', error);
+    res.status(500).json({ error: 'Erro ao salvar evento', details: error.message });
+  }
+});
+
+// POST /api/cycle-data - dados de ciclo (registrados como evento)
+app.post('/api/cycle-data', authenticateDevice, async (req, res) => {
+  try {
+    const { serial_number } = req.body;
+    const deviceId = await getOrCreateDeviceId(serial_number);
+    if (!deviceId) return res.status(400).json({ error: 'serial_number ausente' });
+
+    await pool.query(
+      'INSERT INTO event_logs (device_id, event_type, message) VALUES ($1, $2, $3)',
+      [deviceId, 'CYCLE', JSON.stringify(req.body).slice(0, 2000)]
+    );
+
+    await pool.query('UPDATE devices SET last_seen = CURRENT_TIMESTAMP WHERE id = $1', [deviceId]);
+    res.json({ success: true, message: 'Ciclo salvo' });
+  } catch (error) {
+    console.error('Erro ao salvar ciclo:', error);
+    res.status(500).json({ error: 'Erro ao salvar ciclo', details: error.message });
+  }
+});
+
+// POST /api/maintenance - registro de manutencao
+app.post('/api/maintenance', authenticateDevice, async (req, res) => {
+  try {
+    const { serial_number, technician, tech, description, desc, horas_operacao } = req.body;
+    const deviceId = await getOrCreateDeviceId(serial_number);
+    if (!deviceId) return res.status(400).json({ error: 'serial_number ausente' });
+
+    await pool.query(
+      'INSERT INTO maintenance_logs (device_id, technician, description, horas_operacao) VALUES ($1, $2, $3, $4)',
+      [deviceId, technician || tech || null, description || desc || null, horas_operacao || 0]
+    );
+
+    await pool.query('UPDATE devices SET last_seen = CURRENT_TIMESTAMP WHERE id = $1', [deviceId]);
+    res.json({ success: true, message: 'Manutencao salva' });
+  } catch (error) {
+    console.error('Erro ao salvar manutencao:', error);
+    res.status(500).json({ error: 'Erro ao salvar manutencao', details: error.message });
+  }
+});
+
+// Health check (util para diagnostico do dispositivo)
+app.get('/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ status: 'online', database: 'connected', timestamp: new Date().toISOString() });
+  } catch (e) {
+    res.status(500).json({ status: 'degraded', database: 'error', details: e.message });
+  }
+});
+
 // Rota padrao - redireciona para index
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
